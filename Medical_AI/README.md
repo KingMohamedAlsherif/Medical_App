@@ -4,6 +4,8 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 First, run the development server:
 
+npm install to make sure all packages are installed (daisyUI for tailwind added!)
+
 ```bash
 npm run dev
 # or
