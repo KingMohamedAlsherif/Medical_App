@@ -288,7 +288,7 @@ export default function Home() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder="Describe your symptoms or health concerns..."
-                    className="flex-1 border rounded-lg px-3 py-2 text-sm resize-none"
+                    className="text-black flex-1 border rounded-lg px-3 py-2 text-sm resize-none"
                     rows={2}
                     disabled={loading}
                   />
