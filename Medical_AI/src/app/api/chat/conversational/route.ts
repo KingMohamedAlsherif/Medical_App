@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { TriageAgent } from '@/lib/triageAgent';
-import { enhancedTriageAgent } from '@/lib/enhancedTriageAgent';
+import { ConversationalTriageAgent, ConversationState } from '@/lib/conversationalTriageAgent';
 import { sessionStore } from '@/lib/sessionStore';
-import { ChatRequest, ChatResponse, TriageLog } from '@/types';
+import { ConversationalChatRequest, ConversationalChatResponse } from '@/types';
 import { 
   chatRateLimiter, 
   getClientIdentifier, 
@@ -14,8 +13,8 @@ import {
 import { nanoid } from 'nanoid';
 
 /**
- * POST /api/chat
- * Handles user-AI message exchange and triage analysis
+ * POST /api/chat/conversational
+ * Handles conversational triage flow with structured patient data collection
  */
 export async function POST(request: NextRequest) {
   try {
@@ -36,8 +35,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body: ChatRequest = await request.json();
-    const { message, sessionId } = body;
+    const body: ConversationalChatRequest = await request.json();
+    const { message, sessionId, conversationState } = body;
 
     // Validate input
     if (!message || message.trim().length === 0) {
@@ -76,6 +75,8 @@ Please contact a mental health professional or go to your nearest emergency room
       return NextResponse.json({
         sessionId: sessionId || 'crisis-session',
         response: emergencyResponse,
+        conversationState: conversationState || ConversationalTriageAgent.initializeConversation(),
+        isComplete: true,
         triageResult: {
           isEmergency: true,
           confidence: 1.0,
@@ -105,7 +106,7 @@ Please contact a mental health professional or go to your nearest emergency room
       session = sessionStore.createSession();
     }
 
-    // Store user message (use sanitized version)
+    // Store user message
     const userMessage = sessionStore.addMessage(session.id, sanitizedMessage, 'user');
     if (!userMessage) {
       return NextResponse.json(
@@ -114,109 +115,53 @@ Please contact a mental health professional or go to your nearest emergency room
       );
     }
 
-    // Validate that the message is health-related
-    if (!TriageAgent.isHealthRelated(sanitizedMessage)) {
-      const response = "I'm a medical triage assistant. Please describe your health symptoms or medical concerns so I can help direct you to the appropriate care.";
-      
-      sessionStore.addMessage(session.id, response, 'ai');
-      
-      return NextResponse.json({
-        sessionId: session.id,
-        response,
-        triageResult: {
-          isEmergency: false,
-          confidence: 0,
-          explanation: "Please provide health-related information for proper assistance.",
-          reasoning: "Input does not appear to be health-related."
-        },
-        suggestedActions: [
-          "Describe your symptoms",
-          "Ask about a medical condition",
-          "Request help with health concerns"
-        ]
-      });
-    }
+    // Initialize or use existing conversation state
+    const currentState: ConversationState = conversationState || ConversationalTriageAgent.initializeConversation();
 
-    // Analyze symptoms with AI triage agent
-    // Use enhanced AI if API key is available, otherwise fall back to rule-based
-    const useEnhancedAI = process.env.GOOGLE_AI_API_KEY ? true : false;
-    
-    const triageResult = useEnhancedAI 
-      ? await enhancedTriageAgent.analyzeWithAI(sanitizedMessage)
-      : await TriageAgent.analyzeSymptoms(sanitizedMessage);
-
-    // Generate appropriate response
-    let response: string;
-    let suggestedActions: string[] = [];
-
-    if (triageResult.isEmergency) {
-      response = `🚨 **EMERGENCY DETECTED**
-
-${triageResult.explanation}
-
-**IMMEDIATE ACTION REQUIRED:**
-- Call 911 or go to the nearest emergency room immediately
-- Do not delay seeking medical attention
-- If possible, have someone accompany you
-
-**Emergency symptoms detected:** ${triageResult.redFlags?.join(', ')}
-
-${triageResult.reasoning}`;
-
-      suggestedActions = [
-        "Call 911",
-        "Go to Emergency Room",
-        "Contact Emergency Services"
-      ];
-    } else {
-      const specialty = triageResult.suggestedSpecialty || 'Internal Medicine';
-      
-      response = `📋 **Medical Triage Assessment**
-
-${triageResult.explanation}
-
-**Recommended next steps:**
-- Schedule an appointment with a ${specialty} specialist
-- Continue monitoring your symptoms
-- Seek medical attention if symptoms worsen
-
-**Analysis:** ${triageResult.reasoning}
-
-Would you like me to help you find available appointments with ${specialty} specialists?`;
-
-      suggestedActions = [
-        `Book ${specialty} appointment`,
-        "Ask follow-up questions",
-        "Get more information about symptoms"
-      ];
-
-      // Generate follow-up questions
-      const followUpQuestions = TriageAgent.generateFollowUpQuestions(specialty);
-      if (followUpQuestions.length > 0) {
-        response += `\n\n**Additional questions to help with your care:**\n${followUpQuestions.map(q => `• ${q}`).join('\n')}`;
-      }
-    }
+    // Process message with conversational triage agent
+    const result = await ConversationalTriageAgent.processMessage(sanitizedMessage, currentState);
 
     // Store AI response
-    sessionStore.addMessage(session.id, response, 'ai');
+    sessionStore.addMessage(session.id, result.response, 'ai');
 
-    // Log triage result
-    const triageLog: TriageLog = {
-      id: nanoid(),
-      sessionId: session.id,
-      messageId: userMessage.id,
-      result: triageResult,
-      timestamp: new Date()
-    };
-    sessionStore.addTriageLog(triageLog);
+    // Store conversation state in session (you might want to enhance sessionStore for this)
+    if (session) {
+      // @ts-ignore - Adding conversation state to session (enhance sessionStore interface if needed)
+      session.conversationState = result.newState;
+    }
+
+    // Log triage result if available
+    if (result.triageResult) {
+      const triageLog = {
+        id: nanoid(),
+        sessionId: session.id,
+        messageId: userMessage.id,
+        result: result.triageResult,
+        timestamp: new Date()
+      };
+      sessionStore.addTriageLog(triageLog);
+    }
+
+    // Generate patient summary if conversation is complete and not emergency
+    let patientSummary: string | undefined;
+    if (result.isComplete && result.triageResult && !result.triageResult.isEmergency) {
+      patientSummary = generatePatientSummary(result.newState.patientData, result.triageResult);
+    }
 
     // Prepare response
-    const chatResponse: ChatResponse = {
+    const chatResponse: ConversationalChatResponse = {
       sessionId: session.id,
-      response,
-      triageResult,
-      suggestedActions
+      response: result.response,
+      conversationState: result.newState,
+      isComplete: result.isComplete,
+      suggestedActions: result.suggestedActions,
+      patientSummary
     };
+
+    // Add triageResult only if it exists
+    if (result.triageResult) {
+      chatResponse.triageResult = result.triageResult;
+    }
 
     // Add rate limit headers to successful responses
     return NextResponse.json(chatResponse, {
@@ -227,7 +172,7 @@ Would you like me to help you find available appointments with ${specialty} spec
     });
 
   } catch (error) {
-    console.error('Chat API error:', error);
+    console.error('Conversational Chat API error:', error);
     return NextResponse.json(
       createErrorResponse('Internal server error', 500),
       { status: 500 }
@@ -236,8 +181,39 @@ Would you like me to help you find available appointments with ${specialty} spec
 }
 
 /**
- * GET /api/chat?sessionId=xxx
- * Retrieves chat history for a session
+ * Generate structured patient summary
+ */
+function generatePatientSummary(patientData: any, triageResult: any): string {
+  const conditions = patientData.chronicConditions && patientData.chronicConditions.length > 0
+    ? patientData.chronicConditions.join(', ')
+    : 'None reported';
+
+  return `## 📋 **Patient Medical Summary**
+
+**Patient Information:**
+- **Name:** ${patientData.name}
+- **Age:** ${patientData.age} years
+- **Gender:** ${patientData.gender}
+- **Chronic Conditions:** ${conditions}
+
+**Symptoms Reported:**
+${patientData.symptoms}
+
+**Triage Classification:** ${triageResult.isEmergency ? 'Emergency' : 'Non-Emergency'}
+**Recommended Specialist:** ${triageResult.suggestedSpecialty || 'Internal Medicine'}
+**Confidence Level:** ${Math.round(triageResult.confidence * 100)}%
+
+**Clinical Reasoning:**
+${triageResult.reasoning}
+
+---
+*Generated on: ${new Date().toLocaleString()}*
+*This summary has been created by AI triage assistant and should be reviewed by medical professionals.*`;
+}
+
+/**
+ * GET /api/chat/conversational?sessionId=xxx
+ * Retrieves conversational chat history with conversation state
  */
 export async function GET(request: NextRequest) {
   try {
@@ -265,11 +241,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       session,
       messages,
-      triageLogs
+      triageLogs,
+      // @ts-ignore - conversationState might not exist in type
+      conversationState: session.conversationState || null
     });
 
   } catch (error) {
-    console.error('Chat GET API error:', error);
+    console.error('Conversational Chat GET API error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

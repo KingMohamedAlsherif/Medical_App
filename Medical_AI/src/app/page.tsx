@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { ConversationState, ConversationalChatResponse } from '@/types';
 
 interface Message {
   id: string;
@@ -9,111 +10,96 @@ interface Message {
   timestamp: Date;
 }
 
-interface TriageResult {
-  isEmergency: boolean;
-  confidence: number;
-  explanation: string;
-  reasoning: string;
-  suggestedSpecialty?: string;
-}
-
-export default function Home() {
+export default function ConversationalTriagePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [triageResult, setTriageResult] = useState<TriageResult | null>(null);
-  const [appointmentBooked, setAppointmentBooked] = useState(false);
+  const [sessionId, setSessionId] = useState<string>('');
+  const [conversationState, setConversationState] = useState<ConversationState | null>(null);
+  const [isComplete, setIsComplete] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const createSession = async () => {
-    try {
-      const response = await fetch('/api/session', {
-        method: 'POST',
-      });
-      const data = await response.json();
-      setSessionId(data.sessionId);
-      
-      // Add welcome message to UI
-      const welcomeMsg: Message = {
-        id: 'welcome',
-        content: data.message || 'Welcome to Cleveland Clinic AI Triage Assistant',
-        sender: 'ai',
-        timestamp: new Date()
-      };
-      
-      // Get the actual welcome message from the session
-      const sessionResponse = await fetch(`/api/chat?sessionId=${data.sessionId}`);
-      const sessionData = await sessionResponse.json();
-      
-      if (sessionData.messages && sessionData.messages.length > 0) {
-        const formattedMessages = sessionData.messages.map((msg: any) => ({
-          id: msg.id,
-          content: msg.content,
-          sender: msg.sender,
-          timestamp: new Date(msg.timestamp)
-        }));
-        setMessages(formattedMessages);
-      } else {
-        setMessages([welcomeMsg]);
-      }
-    } catch (error) {
-      console.error('Failed to create session:', error);
-    }
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const sendMessage = async () => {
-    if (!input.trim()) return;
-    
-    if (!sessionId) {
-      await createSession();
-      return;
-    }
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
-    setLoading(true);
-    
-    // Add user message to UI immediately
+  useEffect(() => {
+    // Add initial greeting
+    const initialMessage: Message = {
+      id: '1',
+      content: "👋 Welcome to our AI Medical Triage System! I'll help assess your symptoms and guide you to appropriate care. Let's start by getting to know you better.",
+      sender: 'ai',
+      timestamp: new Date()
+    };
+    setMessages([initialMessage]);
+  }, []);
+
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+
     const userMessage: Message = {
       id: Date.now().toString(),
       content: input,
       sender: 'user',
       timestamp: new Date()
     };
-    
+
     setMessages(prev => [...prev, userMessage]);
-    const currentInput = input;
     setInput('');
+    setLoading(true);
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch('/api/chat/conversational', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: currentInput,
-          sessionId,
+          message: input,
+          sessionId: sessionId || undefined,
+          conversationState: conversationState
         }),
       });
 
-      const data = await response.json();
-      
-      if (response.ok) {
-        const aiMessage: Message = {
-          id: Date.now().toString() + '_ai',
-          content: data.response,
-          sender: 'ai',
-          timestamp: new Date()
-        };
-        
-        setMessages(prev => [...prev, aiMessage]);
-        setTriageResult(data.triageResult);
-      } else {
-        throw new Error(data.error || 'Failed to send message');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
+
+      const data: ConversationalChatResponse = await response.json();
+      
+      const aiMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: data.response,
+        sender: 'ai',
+        timestamp: new Date()
+      };
+
+      setMessages(prev => [...prev, aiMessage]);
+      setSessionId(data.sessionId);
+      setConversationState(data.conversationState);
+      setIsComplete(data.isComplete);
+
+      // Show patient summary if available
+      if (data.patientSummary && data.isComplete) {
+        setTimeout(() => {
+          const summaryMessage: Message = {
+            id: (Date.now() + 2).toString(),
+            content: data.patientSummary!,
+            sender: 'ai',
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, summaryMessage]);
+        }, 1000);
+      }
+
     } catch (error) {
-      console.error('Failed to send message:', error);
+      console.error('Error sending message:', error);
       const errorMessage: Message = {
-        id: Date.now().toString() + '_error',
+        id: (Date.now() + 1).toString(),
         content: 'Sorry, there was an error processing your message. Please try again.',
         sender: 'ai',
         timestamp: new Date()
@@ -124,43 +110,6 @@ export default function Home() {
     }
   };
 
-  const bookAppointment = async () => {
-    if (!triageResult?.suggestedSpecialty || !sessionId) return;
-
-    try {
-      const response = await fetch('/api/booking', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          sessionId,
-          specialty: triageResult.suggestedSpecialty,
-        }),
-      });
-
-      const data = await response.json();
-      
-      const bookingMessage: Message = {
-        id: Date.now().toString() + '_booking',
-        content: data.message,
-        sender: 'ai',
-        timestamp: new Date()
-      };
-      
-      setMessages(prev => [...prev, bookingMessage]);
-      
-      // If booking was successful, set state and store session ID
-      if (data.success) {
-        setAppointmentBooked(true);
-        // Store session ID in localStorage for dashboard access
-        localStorage.setItem('currentSessionId', sessionId);
-      }
-    } catch (error) {
-      console.error('Failed to book appointment:', error);
-    }
-  };
-
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -168,166 +117,189 @@ export default function Home() {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <h1 className="text-2xl font-bold text-gray-900">
-            🏥 Cleveland Clinic AI Triage Assistant
-          </h1>
-          <p className="text-sm text-gray-600 mt-1">
-            AI-powered medical triage and appointment booking system
-          </p>
-        </div>
-      </div>
+  const resetConversation = () => {
+    setMessages([{
+      id: '1',
+      content: "👋 Welcome to our AI Medical Triage System! I'll help assess your symptoms and guide you to appropriate care. Let's start by getting to know you better.",
+      sender: 'ai',
+      timestamp: new Date()
+    }]);
+    setInput('');
+    setSessionId('');
+    setConversationState(null);
+    setIsComplete(false);
+  };
 
-      {/* Main Chat Area */}
-      <div className="flex-1 max-w-4xl mx-auto w-full px-4 py-6">
-        <div className="bg-white rounded-lg shadow-sm border h-[600px] flex flex-col">
+  const getStageDisplay = () => {
+    if (!conversationState) return 'Starting';
+    
+    const stageMap = {
+      greeting: 'Starting Conversation',
+      collecting_basic_info: 'Collecting Personal Information',
+      collecting_symptoms: 'Describing Symptoms',
+      follow_up_questions: 'Answering Follow-up Questions',
+      specialist_recommendation: 'Reviewing Recommendations',
+      booking: 'Booking Appointment'
+    };
+    
+    return stageMap[conversationState.stage] || conversationState.stage;
+  };
+
+  const getProgressPercentage = () => {
+    if (!conversationState) return 0;
+    
+    const progressMap = {
+      greeting: 10,
+      collecting_basic_info: 30,
+      collecting_symptoms: 50,
+      follow_up_questions: 70,
+      specialist_recommendation: 90,
+      booking: 100
+    };
+    
+    return progressMap[conversationState.stage] || 0;
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white p-4">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <h1 className="text-3xl font-bold text-gray-800 mb-2">
+            🩺 Conversational Medical Triage
+          </h1>
+          <p className="text-gray-600">
+            AI-powered medical assessment with structured data collection
+          </p>
           
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">
-                <div className="text-4xl mb-4">🩺</div>
-                <h2 className="text-xl font-semibold mb-2">Welcome to AI Triage</h2>
-                <p className="text-sm">Click "Start New Chat" to begin your medical consultation</p>
-              </div>
-            ) : (
-              messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                      message.sender === 'user'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-900'
-                    }`}
-                  >
-                    <div className="whitespace-pre-wrap text-sm">
-                      {message.content}
-                    </div>
-                    <div className="text-xs mt-1 opacity-70">
-                      {message.timestamp.toLocaleTimeString()}
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-            {loading && (
-              <div className="flex justify-start">
-                <div className="bg-gray-100 rounded-lg px-4 py-2">
-                  <div className="flex items-center space-x-2">
-                    <div className="animate-spin h-4 w-4 border-2 border-blue-600 border-t-transparent rounded-full"></div>
-                    <span className="text-sm text-gray-600">AI is analyzing...</span>
-                  </div>
-                </div>
-              </div>
-            )}
+          {/* Progress Bar */}
+          <div className="mt-4">
+            <div className="flex justify-between text-sm text-gray-600 mb-1">
+              <span>Progress: {getStageDisplay()}</span>
+              <span>{getProgressPercentage()}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div 
+                className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                style={{ width: `${getProgressPercentage()}%` }}
+              ></div>
+            </div>
           </div>
 
-          {/* Triage Result Display */}
-          {triageResult && (
-            <div className="border-t p-4 bg-gray-50">
-              <div className={`rounded-lg p-3 ${
-                triageResult.isEmergency 
-                  ? 'bg-red-50 border border-red-200' 
-                  : 'bg-green-50 border border-green-200'
-              }`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-2">
-                      <span className={`text-lg ${
-                        triageResult.isEmergency ? 'text-red-600' : 'text-green-600'
-                      }`}>
-                        {triageResult.isEmergency ? '🚨' : '✅'}
-                      </span>
-                      <span className="font-semibold text-sm">
-                        {triageResult.isEmergency ? 'Emergency Detected' : 'Non-Emergency'}
-                      </span>
-                      <span className="text-xs text-gray-600">
-                        ({Math.round(triageResult.confidence * 100)}% confidence)
-                      </span>
-                    </div>
-                    {triageResult.suggestedSpecialty && !triageResult.isEmergency && (
-                      <p className="text-sm text-gray-700 mt-1">
-                        Recommended: <strong>{triageResult.suggestedSpecialty}</strong>
-                      </p>
-                    )}
-                  </div>
-                  {triageResult.suggestedSpecialty && !triageResult.isEmergency && (
-                    <button
-                      onClick={bookAppointment}
-                      className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 transition-colors"
-                    >
-                      Book Appointment
-                    </button>
-                  )}
-                </div>
+          {/* Patient Info Display */}
+          {conversationState?.patientData && (
+            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Patient Information:</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                {conversationState.patientData.name && (
+                  <div><strong>Name:</strong> {conversationState.patientData.name}</div>
+                )}
+                {conversationState.patientData.age && (
+                  <div><strong>Age:</strong> {conversationState.patientData.age}</div>
+                )}
+                {conversationState.patientData.gender && (
+                  <div><strong>Gender:</strong> {conversationState.patientData.gender}</div>
+                )}
+                {conversationState.suggestedSpecialty && (
+                  <div><strong>Specialty:</strong> {conversationState.suggestedSpecialty}</div>
+                )}
               </div>
             </div>
           )}
+        </div>
 
-          {/* Input Area */}
-          <div className="border-t p-4">
-            <div className="flex space-x-2">
-              {!sessionId ? (
-                <button
-                  onClick={createSession}
-                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+        {/* Chat Container */}
+        <div className="bg-white rounded-lg shadow-lg flex flex-col h-96">
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-xs lg:max-w-md xl:max-w-lg px-4 py-2 rounded-lg ${
+                    message.sender === 'user'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-800'
+                  }`}
                 >
-                  Start New Chat
-                </button>
-              ) : (
-                <>
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder="Describe your symptoms or health concerns..."
-                    className="text-black flex-1 border rounded-lg px-3 py-2 text-sm resize-none"
-                    rows={2}
-                    disabled={loading}
-                  />
-                  <button
-                    onClick={sendMessage}
-                    disabled={loading || !input.trim()}
-                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                  >
-                    Send
-                  </button>
-                </>
-              )}
-            </div>
-            {sessionId && (
-              <div className="mt-2 flex items-center justify-between">
-                <div className="text-xs text-gray-500">
-                  Session ID: {sessionId} • Press Enter to send
+                  <div className="whitespace-pre-wrap break-words">
+                    {message.content}
+                  </div>
+                  <div className={`text-xs mt-1 ${
+                    message.sender === 'user' ? 'text-blue-100' : 'text-gray-500'
+                  }`}>
+                    {message.timestamp.toLocaleTimeString()}
+                  </div>
                 </div>
-                {appointmentBooked && (
-                  <button
-                    onClick={() => window.location.href = `/dashboard?session=${sessionId}`}
-                    className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
-                  >
-                    📊 View Dashboard
-                  </button>
-                )}
+              </div>
+            ))}
+            {loading && (
+              <div className="flex justify-start">
+                <div className="bg-gray-100 text-gray-800 px-4 py-2 rounded-lg">
+                  <div className="flex items-center space-x-2">
+                    <div className="animate-bounce">●</div>
+                    <div className="animate-bounce" style={{ animationDelay: '0.1s' }}>●</div>
+                    <div className="animate-bounce" style={{ animationDelay: '0.2s' }}>●</div>
+                  </div>
+                </div>
               </div>
             )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input */}
+          <div className="border-t p-4">
+            <div className="flex space-x-2">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder={isComplete ? "Conversation completed. Start a new one!" : "Type your message..."}
+                disabled={loading || isComplete}
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                rows={2}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={loading || !input.trim() || isComplete}
+                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Send
+              </button>
+            </div>
+            
+            {/* Action Buttons */}
+            <div className="flex justify-between mt-3">
+              <button
+                onClick={resetConversation}
+                className="text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                Start New Conversation
+              </button>
+              
+              {isComplete && (
+                <div className="text-sm text-green-600 font-medium">
+                  ✅ Assessment Complete
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Footer */}
-      <div className="bg-white border-t">
-        <div className="max-w-4xl mx-auto px-4 py-3">
-          <p className="text-xs text-gray-500 text-center">
-            ⚠️ This AI assistant does not replace professional medical advice. 
-            Always consult with a healthcare provider for proper diagnosis and treatment.
-          </p>
+        {/* Instructions */}
+        <div className="mt-6 bg-blue-50 rounded-lg p-4">
+          <h3 className="text-lg font-semibold text-blue-800 mb-2">How it works:</h3>
+          <ol className="list-decimal list-inside space-y-1 text-blue-700">
+            <li>The AI will greet you and collect basic information (name, age, gender)</li>
+            <li>You'll be asked about any chronic conditions you may have</li>
+            <li>Describe your current symptoms in detail</li>
+            <li>The AI will analyze for emergency indicators based on your profile</li>
+            <li>If not an emergency, you'll answer follow-up questions</li>
+            <li>You'll receive a specialist recommendation and option to book</li>
+            <li>A complete medical summary will be generated</li>
+          </ol>
         </div>
       </div>
     </div>
