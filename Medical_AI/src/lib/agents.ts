@@ -195,5 +195,6 @@ Follow these instructions exactly to provide a smooth, empathetic medical triage
   return await platoTrpc.viewer.connect.messages.send.mutate({
     content: { en: data.text },
     conversationId: id,
+    flags: ["AI_AUTO_REPLY"],
   });
 };

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ApiClient } from "@/lib/query";
 
 export const metadata: Metadata = {
   title: "Cleveland Clinic AI Triage Assistant",
@@ -14,7 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="antialiased">
-        {children}
+        <ApiClient>{children}</ApiClient>
       </body>
     </html>
   );

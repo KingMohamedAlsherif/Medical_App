@@ -10,6 +10,7 @@ const MedicalReportSchema = z.object({
   gender: z.enum(["Male", "Female", "Other"]),
   diagnosis: z.string(),
   symptoms: z.array(z.string()),
+  mentalHealth: z.array(z.string()),
   prescribedMedications: z.array(
     z.object({
       name: z.string(),
