@@ -1,16 +1,18 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { ConversationalTriageAgent, ConversationState } from '@/lib/conversationalTriageAgent';
-import { sessionStore } from '@/lib/sessionStore';
-import { ConversationalChatRequest, ConversationalChatResponse } from '@/types';
-import { 
-  chatRateLimiter, 
-  getClientIdentifier, 
-  sanitizeInput, 
+import { NextRequest, NextResponse } from "next/server";
+import { TriageAgent } from "@/lib/triageAgent";
+import { enhancedTriageAgent } from "@/lib/enhancedTriageAgent";
+import { sessionStore } from "@/lib/sessionStore";
+import { ChatRequest, ChatResponse, TriageLog } from "@/types";
+import {
+  chatRateLimiter,
+  getClientIdentifier,
+  sanitizeInput,
   isValidSessionId,
   validateMedicalContent,
-  createErrorResponse 
-} from '@/lib/security';
-import { nanoid } from 'nanoid';
+  createErrorResponse,
+} from "@/lib/security";
+import { nanoid } from "nanoid";
+import { platoTrpc } from "@/lib/plato";
 
 /**
  * POST /api/chat/conversational
@@ -21,16 +23,19 @@ export async function POST(request: NextRequest) {
     // Rate limiting
     const clientId = getClientIdentifier(request);
     const rateLimitResult = chatRateLimiter.isAllowed(clientId);
-    
+
     if (!rateLimitResult.allowed) {
       return NextResponse.json(
-        createErrorResponse('Rate limit exceeded. Please try again later.', 429),
-        { 
+        createErrorResponse(
+          "Rate limit exceeded. Please try again later.",
+          429
+        ),
+        {
           status: 429,
           headers: {
-            'X-RateLimit-Remaining': '0',
-            'X-RateLimit-Reset': rateLimitResult.resetTime.toString()
-          }
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": rateLimitResult.resetTime.toString(),
+          },
         }
       );
     }
@@ -40,20 +45,18 @@ export async function POST(request: NextRequest) {
 
     // Validate input
     if (!message || message.trim().length === 0) {
-      return NextResponse.json(
-        createErrorResponse('Message is required'),
-        { status: 400 }
-      );
+      return NextResponse.json(createErrorResponse("Message is required"), {
+        status: 400,
+      });
     }
 
     // Sanitize input
     const sanitizedMessage = sanitizeInput(message);
-    
+
     if (sanitizedMessage.length === 0) {
-      return NextResponse.json(
-        createErrorResponse('Invalid message content'),
-        { status: 400 }
-      );
+      return NextResponse.json(createErrorResponse("Invalid message content"), {
+        status: 400,
+      });
     }
 
     // Check for harmful content
@@ -73,29 +76,33 @@ If you're having thoughts of self-harm or suicide, please reach out for immediat
 Please contact a mental health professional or go to your nearest emergency room immediately.`;
 
       return NextResponse.json({
-        sessionId: sessionId || 'crisis-session',
+        sessionId: sessionId || "crisis-session",
         response: emergencyResponse,
-        conversationState: conversationState || ConversationalTriageAgent.initializeConversation(),
+        conversationState:
+          conversationState ||
+          ConversationalTriageAgent.initializeConversation(),
         isComplete: true,
         triageResult: {
           isEmergency: true,
           confidence: 1.0,
-          explanation: "Mental health crisis detected. Immediate professional help recommended.",
-          reasoning: "Content indicates potential self-harm or suicidal ideation."
+          explanation:
+            "Mental health crisis detected. Immediate professional help recommended.",
+          reasoning:
+            "Content indicates potential self-harm or suicidal ideation.",
         },
         suggestedActions: [
           "Call 988 (Suicide Prevention Lifeline)",
           "Call 911",
           "Go to Emergency Room",
-          "Contact Crisis Text Line: Text HOME to 741741"
-        ]
+          "Contact Crisis Text Line: Text HOME to 741741",
+        ],
       });
     }
 
     // Validate session ID format if provided
     if (sessionId && !isValidSessionId(sessionId)) {
       return NextResponse.json(
-        createErrorResponse('Invalid session ID format'),
+        createErrorResponse("Invalid session ID format"),
         { status: 400 }
       );
     }
@@ -106,75 +113,143 @@ Please contact a mental health professional or go to your nearest emergency room
       session = sessionStore.createSession();
     }
 
-    // Store user message
-    const userMessage = sessionStore.addMessage(session.id, sanitizedMessage, 'user');
+    // Store user message (use sanitized version)
+    const userMessage = sessionStore.addMessage(
+      session.id,
+      sanitizedMessage,
+      "user"
+    );
     if (!userMessage) {
       return NextResponse.json(
-        { error: 'Failed to store message' },
+        { error: "Failed to store message" },
         { status: 500 }
       );
     }
 
-    // Initialize or use existing conversation state
-    const currentState: ConversationState = conversationState || ConversationalTriageAgent.initializeConversation();
+    // Validate that the message is health-related
+    if (!TriageAgent.isHealthRelated(sanitizedMessage)) {
+      const response =
+        "I'm a medical triage assistant. Please describe your health symptoms or medical concerns so I can help direct you to the appropriate care.";
 
-    // Process message with conversational triage agent
-    const result = await ConversationalTriageAgent.processMessage(sanitizedMessage, currentState);
+      sessionStore.addMessage(session.id, response, "ai");
+
+      return NextResponse.json({
+        sessionId: session.id,
+        response,
+        triageResult: {
+          isEmergency: false,
+          confidence: 0,
+          explanation:
+            "Please provide health-related information for proper assistance.",
+          reasoning: "Input does not appear to be health-related.",
+        },
+        suggestedActions: [
+          "Describe your symptoms",
+          "Ask about a medical condition",
+          "Request help with health concerns",
+        ],
+      });
+    }
+
+    // Analyze symptoms with AI triage agent
+    // Use enhanced AI if API key is available, otherwise fall back to rule-based
+    const useEnhancedAI = process.env.GOOGLE_AI_API_KEY ? true : false;
+
+    const triageResult = useEnhancedAI
+      ? await enhancedTriageAgent.analyzeWithAI(sanitizedMessage)
+      : await TriageAgent.analyzeSymptoms(sanitizedMessage);
+
+    // Generate appropriate response
+    let response: string;
+    let suggestedActions: string[] = [];
+
+    if (triageResult.isEmergency) {
+      response = `🚨 **EMERGENCY DETECTED**
+
+${triageResult.explanation}
+
+**IMMEDIATE ACTION REQUIRED:**
+- Call 911 or go to the nearest emergency room immediately
+- Do not delay seeking medical attention
+- If possible, have someone accompany you
+
+**Emergency symptoms detected:** ${triageResult.redFlags?.join(", ")}
+
+${triageResult.reasoning}`;
+
+      suggestedActions = [
+        "Call 911",
+        "Go to Emergency Room",
+        "Contact Emergency Services",
+      ];
+    } else {
+      const specialty = triageResult.suggestedSpecialty || "Internal Medicine";
+
+      response = `📋 **Medical Triage Assessment**
+
+${triageResult.explanation}
+
+**Recommended next steps:**
+- Schedule an appointment with a ${specialty} specialist
+- Continue monitoring your symptoms
+- Seek medical attention if symptoms worsen
+
+**Analysis:** ${triageResult.reasoning}
+
+Would you like me to help you find available appointments with ${specialty} specialists?`;
+
+      suggestedActions = [
+        `Book ${specialty} appointment`,
+        "Ask follow-up questions",
+        "Get more information about symptoms",
+      ];
+
+      // Generate follow-up questions
+      const followUpQuestions =
+        TriageAgent.generateFollowUpQuestions(specialty);
+      if (followUpQuestions.length > 0) {
+        response += `\n\n**Additional questions to help with your care:**\n${followUpQuestions
+          .map((q) => `• ${q}`)
+          .join("\n")}`;
+      }
+    }
 
     // Store AI response
-    sessionStore.addMessage(session.id, result.response, 'ai');
+    sessionStore.addMessage(session.id, response, "ai");
+    await platoTrpc.viewer.connect.messages.send.mutate({
+      content: { en: response },
+      conversationId: "cmgip5no000150fhoiz6doqvl",
+    });
 
-    // Store conversation state in session (you might want to enhance sessionStore for this)
-    if (session) {
-      // @ts-ignore - Adding conversation state to session (enhance sessionStore interface if needed)
-      session.conversationState = result.newState;
-    }
-
-    // Log triage result if available
-    if (result.triageResult) {
-      const triageLog = {
-        id: nanoid(),
-        sessionId: session.id,
-        messageId: userMessage.id,
-        result: result.triageResult,
-        timestamp: new Date()
-      };
-      sessionStore.addTriageLog(triageLog);
-    }
-
-    // Generate patient summary if conversation is complete and not emergency
-    let patientSummary: string | undefined;
-    if (result.isComplete && result.triageResult && !result.triageResult.isEmergency) {
-      patientSummary = generatePatientSummary(result.newState.patientData, result.triageResult);
-    }
+    // Log triage result
+    const triageLog: TriageLog = {
+      id: nanoid(),
+      sessionId: session.id,
+      messageId: userMessage.id,
+      result: triageResult,
+      timestamp: new Date(),
+    };
+    sessionStore.addTriageLog(triageLog);
 
     // Prepare response
     const chatResponse: ConversationalChatResponse = {
       sessionId: session.id,
-      response: result.response,
-      conversationState: result.newState,
-      isComplete: result.isComplete,
-      suggestedActions: result.suggestedActions,
-      patientSummary
+      response,
+      triageResult,
+      suggestedActions,
     };
-
-    // Add triageResult only if it exists
-    if (result.triageResult) {
-      chatResponse.triageResult = result.triageResult;
-    }
 
     // Add rate limit headers to successful responses
     return NextResponse.json(chatResponse, {
       headers: {
-        'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
-        'X-RateLimit-Reset': rateLimitResult.resetTime.toString()
-      }
+        "X-RateLimit-Remaining": rateLimitResult.remaining.toString(),
+        "X-RateLimit-Reset": rateLimitResult.resetTime.toString(),
+      },
     });
-
   } catch (error) {
-    console.error('Conversational Chat API error:', error);
+    console.error("Chat API error:", error);
     return NextResponse.json(
-      createErrorResponse('Internal server error', 500),
+      createErrorResponse("Internal server error", 500),
       { status: 500 }
     );
   }
@@ -184,9 +259,10 @@ Please contact a mental health professional or go to your nearest emergency room
  * Generate structured patient summary
  */
 function generatePatientSummary(patientData: any, triageResult: any): string {
-  const conditions = patientData.chronicConditions && patientData.chronicConditions.length > 0
-    ? patientData.chronicConditions.join(', ')
-    : 'None reported';
+  const conditions =
+    patientData.chronicConditions && patientData.chronicConditions.length > 0
+      ? patientData.chronicConditions.join(", ")
+      : "None reported";
 
   return `## 📋 **Patient Medical Summary**
 
@@ -199,8 +275,12 @@ function generatePatientSummary(patientData: any, triageResult: any): string {
 **Symptoms Reported:**
 ${patientData.symptoms}
 
-**Triage Classification:** ${triageResult.isEmergency ? 'Emergency' : 'Non-Emergency'}
-**Recommended Specialist:** ${triageResult.suggestedSpecialty || 'Internal Medicine'}
+**Triage Classification:** ${
+    triageResult.isEmergency ? "Emergency" : "Non-Emergency"
+  }
+**Recommended Specialist:** ${
+    triageResult.suggestedSpecialty || "Internal Medicine"
+  }
 **Confidence Level:** ${Math.round(triageResult.confidence * 100)}%
 
 **Clinical Reasoning:**
@@ -218,21 +298,18 @@ ${triageResult.reasoning}
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const sessionId = searchParams.get('sessionId');
+    const sessionId = searchParams.get("sessionId");
 
     if (!sessionId) {
       return NextResponse.json(
-        { error: 'Session ID is required' },
+        { error: "Session ID is required" },
         { status: 400 }
       );
     }
 
     const session = sessionStore.getSession(sessionId);
     if (!session) {
-      return NextResponse.json(
-        { error: 'Session not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
     const messages = sessionStore.getMessages(sessionId);
@@ -242,14 +319,11 @@ export async function GET(request: NextRequest) {
       session,
       messages,
       triageLogs,
-      // @ts-ignore - conversationState might not exist in type
-      conversationState: session.conversationState || null
     });
-
   } catch (error) {
-    console.error('Conversational Chat GET API error:', error);
+    console.error("Chat GET API error:", error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: "Internal server error" },
       { status: 500 }
     );
   }
