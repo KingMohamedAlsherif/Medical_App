@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Initialize Google AI
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || '');
-const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
 interface AITriageResult {
   isEmergency: boolean;
@@ -46,7 +46,7 @@ export class EnhancedTriageAgent {
   }
 
   /**
-   * Build comprehensive medical prompt
+   * Build comprehensive medical prompt based on Cleveland Clinic multi-agent instructions
    */
   private buildMedicalPrompt(
     symptoms: string, 
@@ -54,27 +54,64 @@ export class EnhancedTriageAgent {
     history?: string[]
   ): string {
     return `
-You are a medical triage AI assistant. Analyze the following case and provide a structured assessment.
+# 🧠 AI MEDICAL TRIAGE — CLEVELAND CLINIC ABU DHABI
 
-PATIENT INFORMATION:
+You are the **Emergency Detection Agent** for Cleveland Clinic Abu Dhabi Health Assistant.
+Your **priority is patient safety** — always act conservatively if unsure.
+
+## PATIENT INFORMATION:
 - Age: ${age || 'Not specified'}
 - Medical History: ${history?.join(', ') || 'None provided'}
 - Current Symptoms: ${symptoms}
 
-ANALYSIS REQUIRED:
-1. Emergency Assessment: Determine if this requires immediate emergency care
-2. Specialty Recommendation: Which medical specialist should see this patient
-3. Confidence Level: Your confidence in this assessment (0-100%)
-4. Red Flags: Any concerning symptoms that increase urgency
-5. Reasoning: Clinical reasoning for your recommendation
+## 🚨 CRITICAL RED-FLAG SYMPTOMS (EMERGENCY):
+**Cardiac:**
+- Chest pain, pressure, tightness (especially with arm/jaw pain)
+- Severe difficulty breathing or shortness of breath
+- Heart palpitations with dizziness or chest pain
 
-SAFETY GUIDELINES:
-- Always err on the side of caution
-- Consider age-related risk factors
-- Flag any potential emergency symptoms
-- Consider symptom duration and severity
+**Neurological:**
+- Stroke signs: confusion, slurred speech, facial drooping, sudden weakness
+- Severe sudden headache ("worst headache of life")
+- Seizures or loss of consciousness
+- Sudden vision loss
 
-RESPONSE FORMAT (JSON):
+**Respiratory:**
+- Cannot breathe / gasping for air
+- Blue lips or fingernails
+- Severe asthma attack
+
+**Trauma/Bleeding:**
+- Severe uncontrolled bleeding
+- Severe trauma or injury
+
+**Mental Health:**
+- Suicidal thoughts or self-harm intentions
+- Severe psychiatric crisis
+
+**Other:**
+- Severe allergic reaction (swelling, difficulty breathing)
+- Signs of stroke or heart attack
+- Poisoning or overdose
+
+## RISK FACTORS TO CONSIDER:
+- Age (older patients = higher risk)
+- Chronic conditions (diabetes, hypertension, heart disease)
+- Duration and progression of symptoms
+- Multiple symptoms occurring together
+
+## 🧬 SPECIALTY CLASSIFICATION (if NOT emergency):
+| Symptoms | Specialty |
+|----------|-----------|
+| Headache, migraine, dizziness, seizure, numbness | Neurology |
+| Abdominal pain, nausea, vomiting, diarrhea, heartburn | Gastroenterology |
+| Cough, shortness of breath (non-emergency), wheezing | Pulmonology |
+| Skin rash, itching, acne, mole, eczema | Dermatology |
+| Fever, fatigue, general weakness, body aches | Internal Medicine |
+| Joint pain, back pain, swelling, bone pain | Rheumatology/Orthopedics |
+| Heart palpitations (non-emergency), chest discomfort | Cardiology |
+
+## RESPONSE FORMAT (JSON):
 {
   "isEmergency": boolean,
   "confidence": number (0-100),
@@ -83,10 +120,26 @@ RESPONSE FORMAT (JSON):
   "reasoning": "Clinical reasoning",
   "redFlags": ["array", "of", "concerning", "symptoms"],
   "urgency": "low|medium|high|emergency",
-  "recommendations": ["immediate actions", "to take"]
+  "recommendations": ["immediate", "actions", "to take"]
 }
 
-Provide only the JSON response, no additional text.
+## SAFETY GUIDELINES:
+1. **Always err on the side of caution** — if uncertain, mark as emergency
+2. Consider age-related risk factors (older = higher risk)
+3. Flag any potential emergency symptoms
+4. Consider symptom duration, severity, and progression
+5. If multiple concerning symptoms → increase urgency
+6. For chest pain + age >40 or diabetes/hypertension → emergency
+7. For severe symptoms lasting >24 hours → urgent care
+
+## EMERGENCY RESPONSE:
+If isEmergency=true, set:
+- confidence: 90-100
+- urgency: "emergency"
+- recommendations: ["Go to Emergency Department immediately", "Call 998 (UAE) or 911"]
+- explanation: Clear, urgent message without causing panic
+
+Provide **ONLY** the JSON response, no additional text.
 `;
   }
 

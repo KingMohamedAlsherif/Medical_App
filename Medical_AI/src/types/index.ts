@@ -234,3 +234,44 @@ export interface RegisterResponse {
   message: string;
   error?: string;
 }
+
+// Conversational Triage Types
+export interface PatientData {
+  name?: string;
+  age?: number;
+  gender?: 'male' | 'female' | 'other';
+  chronicConditions?: string[];
+  symptoms?: string;
+  currentSymptoms?: string[];
+  additionalInfo?: Record<string, any>;
+}
+
+export interface ConversationState {
+  stage: 'greeting' | 'collecting_basic_info' | 'collecting_symptoms' | 'follow_up_questions' | 'specialist_recommendation' | 'booking';
+  patientData: PatientData;
+  collectedInfo: {
+    hasName: boolean;
+    hasAge: boolean;
+    hasGender: boolean;
+    hasChronicConditions: boolean;
+    hasSymptoms: boolean;
+  };
+  triageResult?: TriageResult;
+  suggestedSpecialty?: string;
+  followUpQuestions?: string[];
+  currentQuestionIndex?: number;
+}
+
+export interface ConversationalChatRequest extends ChatRequest {
+  conversationState?: ConversationState;
+}
+
+export interface ConversationalChatResponse {
+  sessionId: string;
+  response: string;
+  conversationState: ConversationState;
+  isComplete: boolean;
+  triageResult?: TriageResult;
+  suggestedActions?: string[];
+  patientSummary?: string;
+}
