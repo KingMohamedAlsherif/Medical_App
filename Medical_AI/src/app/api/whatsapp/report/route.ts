@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
   try {
     // Fetch conversation data
     const res = await platoTrpc.viewer.connect.messages.list.query({
-      conversationId: "cmfynuz6v00010fe7yqw5nzgo",
+      conversationId: "cmgip5no000150fhoiz6doqvl",
     });
 
     const messages = res ?? [];
