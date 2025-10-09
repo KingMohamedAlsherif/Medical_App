@@ -1,14 +1,12 @@
 import React from 'react'
-import FloatingChat from '../components/FloatingChat'
+import DoctorDashboard from '../components/DoctorDashboard'
 import FullHeader from '../components/FullHeader'
-import Navibar from '../components/NaviBar'
 
 const ChatDash = () => {
   return (
 	<>
 	<FullHeader />
-	<Navibar />
-	<FloatingChat />
+	<DoctorDashboard />
 	</>
 )
 }

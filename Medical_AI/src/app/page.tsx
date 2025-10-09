@@ -1,16 +1,6 @@
 import React from "react";
-import FloatingChat from "./components/FloatingChat";
-import FullHeader from "./components/FullHeader";
-import Navibar from "./components/NaviBar";
+import NewLandingPage from "./components/NewLandingPage";
 
-const ChatDash = () => {
-  return (
-    <>
-      <FullHeader />
-      <Navibar />
-      <FloatingChat />
-    </>
-  );
-};
-
-export default ChatDash;
+export default function Home() {
+  return <NewLandingPage />;
+}
