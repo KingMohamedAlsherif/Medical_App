@@ -1,5 +1,4 @@
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import { AppRouter } from "plato-api-sdk";
 import superjson from "superjson";
 
 /**
@@ -8,7 +7,7 @@ import superjson from "superjson";
  * @param opts - Client options including base URL.
  */
 export const initPlatoClient = (apiKey: string, opts: { url: string }) => {
-  return createTRPCClient<AppRouter>({
+  return createTRPCClient<any>({
     links: [
       httpBatchLink({
         transformer: superjson,

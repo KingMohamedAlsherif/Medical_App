@@ -1,4 +1,4 @@
-import { platoTrpc } from "@/lib/plato";
+import { aiAutoReply } from "@/lib/agents";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -17,24 +17,8 @@ export async function POST(request: NextRequest) {
       createdAt,
     } = data;
 
-    // await platoTrpc.viewer.connect.messages.autoAiReply.mutate({
-    //     content: { en: `YOU SENT: ${content.en}` },
-    //     conversationId,
-    //   });
-    // await platoTrpc.viewer.connect.messages.send.mutate({
-    //   content: { en: `YOU SENT: ${content.en}` },
-    //   conversationId,
-    // });
-
-    console.log("📩 Incoming WhatsApp Webhook:", {
-      id,
-      status,
-      content,
-      conversationId,
-      senderId,
-      channelIdentifier: channel?.identifier,
-      createdAt,
-    });
+    // Chat Auto Reply
+    await aiAutoReply(content.en, conversationId);
 
     return NextResponse.json({
       success: true,
