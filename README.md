@@ -291,19 +291,4 @@ Traditional healthcare booking involves:
 
 ---
 
-## 📄 License
-
-Proprietary - Cleveland Clinic Abu Dhabi
-
----
-
-## 👥 Contact
-
-For questions or support, contact Cleveland Clinic Abu Dhabi:
-- 📞 Phone: +971 50 186 8376
-- 💬 WhatsApp: [Click to Chat](https://wa.me/971501868376)
-- 🌐 Website: [Cleveland Clinic Abu Dhabi](https://www.clevelandclinicabudhabi.ae)
-
----
-
 **Built with ❤️ for better healthcare accessibility**
